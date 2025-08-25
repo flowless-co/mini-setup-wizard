@@ -2,7 +2,10 @@
   "compilerOptions": {
     "composite": true,
     "skipLibCheck": true,
+    "jsx": "react-jsx", // or "react" or "react-jsxdev" depending on setup
     "module": "ESNext",
+    "target": "es5",
+    "lib": ["es2015", "dom"], // include at least ES2015
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true
