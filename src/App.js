@@ -35,21 +35,23 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from "react";
+import { buildFixtureJson } from "./fixtureTransformer";
 export default function App() {
     var _this = this;
-    var _a = useState(''), rawInput = _a[0], setRawInput = _a[1];
-    var _b = useState(''), formatted = _b[0], setFormatted = _b[1];
-    var _c = useState(''), error = _c[0], setError = _c[1];
+    var _a = useState(""), rawInput = _a[0], setRawInput = _a[1];
+    var _b = useState(""), formatted = _b[0], setFormatted = _b[1];
+    var _c = useState(""), error = _c[0], setError = _c[1];
     var fileInputRef = useRef(null);
+    var _d = useState(false), copied = _d[0], setCopied = _d[1];
     var parseAndFormat = useCallback(function (text) {
-        setError('');
+        setError("");
         try {
             var obj = void 0;
             var trimmed = text.trim();
             if (!trimmed) {
-                setFormatted('');
-                setRawInput('');
+                setFormatted("");
+                setRawInput("");
                 return;
             }
             try {
@@ -65,8 +67,8 @@ export default function App() {
             setRawInput(text);
         }
         catch (e) {
-            setError((e === null || e === void 0 ? void 0 : e.message) || 'Failed to parse JSON.');
-            setFormatted('');
+            setError((e === null || e === void 0 ? void 0 : e.message) || "Failed to parse JSON.");
+            setFormatted("");
         }
     }, []);
     var onFileChange = useCallback(function (e) {
@@ -76,11 +78,11 @@ export default function App() {
             return;
         var reader = new FileReader();
         reader.onload = function () {
-            var text = String(reader.result || '');
+            var text = String(reader.result || "");
             parseAndFormat(text);
         };
-        reader.onerror = function () { return setError('Unable to read the file.'); };
-        reader.readAsText(file, 'utf-8');
+        reader.onerror = function () { return setError("Unable to read the file."); };
+        reader.readAsText(file, "utf-8");
     }, [parseAndFormat]);
     var onDrop = useCallback(function (ev) {
         var _a;
@@ -90,11 +92,11 @@ export default function App() {
             return;
         var reader = new FileReader();
         reader.onload = function () {
-            var text = String(reader.result || '');
+            var text = String(reader.result || "");
             parseAndFormat(text);
         };
-        reader.onerror = function () { return setError('Unable to read the file.'); };
-        reader.readAsText(file, 'utf-8');
+        reader.onerror = function () { return setError("Unable to read the file."); };
+        reader.readAsText(file, "utf-8");
     }, [parseAndFormat]);
     var onPaste = useCallback(function (e) {
         setTimeout(function () { return parseAndFormat(e.target.value); }, 0);
@@ -108,20 +110,40 @@ export default function App() {
                     return [4 /*yield*/, navigator.clipboard.writeText(formatted)];
                 case 1:
                     _a.sent();
+                    setCopied(true);
+                    setTimeout(function () { return setCopied(false); }, 2000); // reset after 2s
                     return [2 /*return*/];
             }
         });
     }); }, [formatted]);
     var handleDownload = useCallback(function () {
-        var blob = new Blob([formatted || rawInput], { type: 'application/json;charset=utf-8' });
+        var blob = new Blob([formatted || rawInput], {
+            type: "application/json;charset=utf-8",
+        });
         var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
+        var a = document.createElement("a");
         a.href = url;
-        a.download = formatted ? 'formatted.json' : 'input.json';
+        a.download = formatted ? "formatted.json" : "input.json";
         a.click();
         URL.revokeObjectURL(url);
     }, [formatted, rawInput]);
-    var dropHint = useMemo(function () { return (_jsxs("ul", { className: 'list-disc text-sm pl-5 space-y-1 text-gray-600 dark:text-gray-300', children: [_jsxs("li", { children: ["Drop a ", _jsx("span", { className: 'font-medium', children: ".json" }), " file here"] }), _jsxs("li", { children: ["or click ", _jsx("span", { className: 'font-medium', children: "Browse" }), " to pick a file"] }), _jsx("li", { children: "or paste JSON directly below" })] })); }, []);
-    return (_jsx("div", { className: 'min-h-screen w-full bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-zinc-950 text-gray-900 dark:text-gray-100', children: _jsxs("div", { className: 'max-w-5xl mx-auto px-4 py-10', children: [_jsxs("header", { className: 'mb-6', children: [_jsx("h1", { className: 'text-3xl sm:text-4xl font-bold tracking-tight', children: "JSON \u2192 Viewer" }), _jsx("p", { className: 'mt-2 text-gray-600 dark:text-gray-300', children: "Upload or paste JSON. I\u2019ll pretty-print it in the large text area. (Django loaddata serialization & stable IDs coming next.)" })] }), _jsxs("section", { className: 'grid gap-6', children: [_jsxs("div", { onDragOver: function (e) { return e.preventDefault(); }, onDrop: onDrop, className: 'rounded-2xl border border-dashed border-gray-300 dark:border-zinc-700 p-6 sm:p-8 bg-white/70 dark:bg-zinc-900/50 backdrop-blur hover:border-gray-400 transition-colors', children: [_jsxs("div", { className: 'flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4', children: [_jsxs("div", { children: [_jsx("h2", { className: 'text-lg font-semibold', children: "Upload JSON" }), _jsx("p", { className: 'text-sm text-gray-600 dark:text-gray-400', children: "Drag & drop or use the file picker." })] }), _jsxs("div", { className: 'flex items-center gap-3', children: [_jsx("button", { onClick: function () { var _a; return (_a = fileInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, className: 'px-4 py-2 rounded-xl bg-gray-900 text-white dark:bg-white dark:text-zinc-900 shadow hover:opacity-90', children: "Browse\u2026" }), _jsx("button", { onClick: function () { setRawInput(''); setFormatted(''); setError(''); if (fileInputRef.current)
-                                                        fileInputRef.current.value = ''; }, className: 'px-4 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800', children: "Clear" }), _jsx("input", { ref: fileInputRef, type: 'file', accept: 'application/json,.json,.txt', onChange: onFileChange, className: 'hidden' })] })] }), _jsx("div", { className: 'mt-4', children: dropHint })] }), _jsxs("div", { className: 'grid gap-2', children: [_jsx("label", { className: 'text-sm font-medium', children: "Paste JSON" }), _jsx("textarea", { value: rawInput, onChange: function (e) { return setRawInput(e.target.value); }, onBlur: function (e) { return parseAndFormat(e.target.value); }, onPaste: onPaste, placeholder: 'Paste JSON here\u2026', className: 'w-full h-40 sm:h-48 rounded-2xl border border-gray-300 dark:border-zinc-700 bg-white/70 dark:bg-zinc-900/50 p-4 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500' })] }), error && (_jsxs("div", { className: 'rounded-xl border border-red-300/70 bg-red-50/70 dark:border-red-900/50 dark:bg-red-950/30 p-4 text-sm text-red-700 dark:text-red-300', children: [_jsx("strong", { className: 'font-semibold', children: "Parse error:" }), " ", error] })), _jsxs("div", { className: 'grid gap-3', children: [_jsxs("div", { className: 'flex items-center justify-between', children: [_jsx("label", { className: 'text-sm font-medium', children: "Formatted JSON" }), _jsxs("div", { className: 'flex gap-2', children: [_jsx("button", { onClick: handleCopy, disabled: !formatted, className: 'px-3 py-1.5 rounded-lg border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800 disabled:opacity-50', children: "Copy" }), _jsx("button", { onClick: handleDownload, disabled: !formatted && !rawInput, className: 'px-3 py-1.5 rounded-lg border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800 disabled:opacity-50', children: "Download" })] })] }), _jsx("textarea", { readOnly: true, value: formatted, placeholder: 'Formatted JSON will appear here\u2026', className: 'w-full min-h-[50vh] rounded-2xl border border-gray-300 dark:border-zinc-700 bg-white/80 dark:bg-zinc-900/50 p-4 font-mono text-sm tracking-tight' })] })] }), _jsxs("footer", { className: 'mt-8 text-xs text-gray-500 dark:text-gray-400', children: ["Tip: This viewer accepts standard JSON or NDJSON (newline\u2011delimited JSON). Later we\u2019ll add a serializer that converts your input into Django ", _jsx("code", { children: "loaddata" }), " fixtures with stable IDs."] })] }) }));
+    var dropHint = useMemo(function () { return (_jsxs("ul", { className: "list-disc text-sm pl-5 space-y-1 text-gray-600 dark:text-gray-300", children: [_jsxs("li", { children: ["Drop a ", _jsx("span", { className: "font-medium", children: ".json" }), " file here"] }), _jsxs("li", { children: ["or click ", _jsx("span", { className: "font-medium", children: "Browse" }), " to pick a file"] }), _jsx("li", { children: "or paste JSON directly below" })] })); }, []);
+    return (_jsx("div", { className: "min-h-screen w-full bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-zinc-950 text-gray-900 dark:text-gray-100", children: _jsxs("div", { className: "max-w-5xl mx-auto px-4 py-10", children: [_jsx("header", { className: "mb-8", children: _jsxs("div", { className: "flex items-center gap-4 sm:gap-5", children: [_jsx("img", { src: "/flowless-icon.png", alt: "Flowless logo", width: 56, height: 56, className: "h-14 w-14 rounded-2xl shadow ring-1 ring-black/5" }), _jsxs("div", { children: [_jsx("h1", { className: "text-3xl sm:text-4xl font-bold tracking-tight", children: "Flowless Setup Wizard \uD83E\uDDD9\u200D\u2642\uFE0F" }), _jsx("p", { className: "mt-2 text-gray-600 dark:text-gray-300", children: "Upload or paste JSON. I\u2019ll pretty-print it in the large text area. (Content setup coming next.) \u23ED\uFE0F" })] })] }) }), _jsxs("section", { className: "grid gap-6", children: [_jsxs("div", { onDragOver: function (e) { return e.preventDefault(); }, onDrop: onDrop, className: "rounded-2xl border border-dashed border-gray-300 dark:border-zinc-700 p-6 sm:p-8 bg-white/70 dark:bg-zinc-900/50 backdrop-blur hover:border-gray-400 transition-colors", children: [_jsxs("div", { className: "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4", children: [_jsxs("div", { children: [_jsx("h2", { className: "text-lg font-semibold", children: "Upload JSON" }), _jsx("p", { className: "text-sm text-gray-600 dark:text-gray-400", children: "Drag & drop or use the file picker." })] }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsx("button", { onClick: function () { var _a; return (_a = fileInputRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, className: "px-4 py-2 rounded-xl bg-gray-900 text-white dark:bg-white dark:text-zinc-900 shadow hover:opacity-90", children: "Browse\u2026" }), _jsx("button", { onClick: function () {
+                                                        setRawInput("");
+                                                        setFormatted("");
+                                                        setError("");
+                                                        if (fileInputRef.current)
+                                                            fileInputRef.current.value = "";
+                                                    }, className: "px-4 py-2 rounded-xl border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800", children: "Clear" }), _jsx("input", { ref: fileInputRef, type: "file", accept: "application/json,.json,.txt", onChange: onFileChange, className: "hidden" })] })] }), _jsx("div", { className: "mt-4", children: dropHint })] }), _jsxs("div", { className: "grid gap-2", children: [_jsx("label", { className: "text-sm font-medium", children: "Paste JSON" }), _jsx("textarea", { value: rawInput, onChange: function (e) { return setRawInput(e.target.value); }, onBlur: function (e) { return parseAndFormat(e.target.value); }, onPaste: onPaste, placeholder: "Paste JSON here\u2026", className: "w-full h-40 sm:h-48 rounded-2xl border border-gray-300 dark:border-zinc-700 bg-white/70 dark:bg-zinc-900/50 p-4 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" })] }), error && (_jsxs("div", { className: "rounded-xl border border-red-300/70 bg-red-50/70 dark:border-red-900/50 dark:bg-red-950/30 p-4 text-sm text-red-700 dark:text-red-300", children: [_jsx("strong", { className: "font-semibold", children: "Parse error:" }), " ", error] })), _jsxs("div", { className: "grid gap-3", children: [_jsxs("div", { className: "flex items-center justify-between", children: [_jsx("label", { className: "text-sm font-medium", children: "Formatted JSON" }), _jsxs("div", { className: "flex gap-2", children: [_jsx("button", { onClick: handleCopy, disabled: !formatted, className: "px-3 py-1.5 rounded-lg border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800 disabled:opacity-50", children: copied ? "✅ Copied!" : "Copy" }), _jsx("button", { onClick: handleDownload, disabled: !formatted && !rawInput, className: "px-3 py-1.5 rounded-lg border border-gray-300 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-800 disabled:opacity-50", children: "Download" }), _jsx("button", { onClick: function () {
+                                                        try {
+                                                            var parsed = JSON.parse(rawInput.trim());
+                                                            var fixture = buildFixtureJson(parsed, 2);
+                                                            setFormatted(fixture);
+                                                            setError("");
+                                                        }
+                                                        catch (e) {
+                                                            setError((e === null || e === void 0 ? void 0 : e.message) ||
+                                                                "Failed to transform to content setup fixture.");
+                                                        }
+                                                    }, disabled: !rawInput.trim(), className: "px-3 py-1.5 rounded-lg border border-indigo-300 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 disabled:opacity-50", children: "Generate Content Setup" })] })] }), _jsx("textarea", { readOnly: true, value: formatted, placeholder: "Formatted JSON will appear here\u2026", className: "w-full min-h-[50vh] rounded-2xl border border-gray-300 dark:border-zinc-700 bg-white/80 dark:bg-zinc-900/50 p-4 font-mono text-sm tracking-tight" })] })] }), _jsx("footer", { className: "mt-8 text-xs text-gray-500 dark:text-gray-400", children: "Tip: This Wizard accepts standard JSON or NDJSON (newline\u2011delimited JSON). Later we\u2019ll add a serializer that converts your input into Flowless Content setup fixtures." })] }) }));
 }
