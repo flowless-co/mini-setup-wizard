@@ -1,2 +1,15 @@
 # dependencies
 node_modules/
+
+# build output
+dist/
+
+# TypeScript
+*.tsbuildinfo
+
+# IDE/editor configs
+.idea/
+.vscode/
+
+# OS junk
+.DS_Store
