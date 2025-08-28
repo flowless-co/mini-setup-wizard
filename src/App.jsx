@@ -1,18 +1,18 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { buildFixtureJson } from "./fixtureTransformer";
+import logo from "./assets/flowless-icon.png"; // ✅ Vite will rewrite this URL
 
 export default function App() {
-  const [rawInput, setRawInput] = useState<string>("");
-  const [formatted, setFormatted] = useState<string>("");
-  const [error, setError] = useState<string>("");
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [rawInput, setRawInput] = useState("");
+  const [formatted, setFormatted] = useState("");
+  const [error, setError] = useState("");
+  const fileInputRef = useRef(null);
   const [copied, setCopied] = useState(false);
-  const logo = new URL("./assets/flowless-icon.png", import.meta.url).href;
 
-  const parseAndFormat = useCallback((text: string) => {
+  const parseAndFormat = useCallback((text) => {
     setError("");
     try {
-      let obj: any;
+      let obj;
       const trimmed = text.trim();
       if (!trimmed) {
         setFormatted("");
@@ -29,14 +29,14 @@ export default function App() {
       const pretty = JSON.stringify(obj, null, 2);
       setFormatted(pretty);
       setRawInput(text);
-    } catch (e: any) {
+    } catch (e) {
       setError(e?.message || "Failed to parse JSON.");
       setFormatted("");
     }
   }, []);
 
   const onFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
       const reader = new FileReader();
@@ -51,7 +51,7 @@ export default function App() {
   );
 
   const onDrop = useCallback(
-    (ev: React.DragEvent<HTMLDivElement>) => {
+    (ev) => {
       ev.preventDefault();
       const file = ev.dataTransfer.files?.[0];
       if (!file) return;
@@ -67,11 +67,8 @@ export default function App() {
   );
 
   const onPaste = useCallback(
-    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      setTimeout(
-        () => parseAndFormat((e.target as HTMLTextAreaElement).value),
-        0
-      );
+    (e) => {
+      setTimeout(() => parseAndFormat(e.target.value), 0);
     },
     [parseAndFormat]
   );
@@ -110,16 +107,21 @@ export default function App() {
     []
   );
 
-  // @ts-ignore
-  // @ts-ignore
-  // @ts-ignore
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-zinc-950 text-gray-900 dark:text-gray-100">
       <div className="max-w-5xl mx-auto px-4 py-10">
         <header className="mb-8">
           <div className="flex items-center gap-4 sm:gap-5">
-            <link rel="icon" type="image/png" href="/flowless-icon.png" />
-
+            <img
+              src={logo} // ✅ correct
+              alt="Flowless logo"
+              width={56}
+              height={56}
+              className="h-14 w-14 object-contain rounded-2xl shadow ring-1 ring-black/5"
+              onError={(e) =>
+                console.error("Logo failed to load:", e.currentTarget.src)
+              }
+            />
             <div>
               <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">
                 Flowless Setup Wizard 🧙‍♂️
@@ -148,7 +150,7 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="px-4 py-2 rounded-xl bg-gray-900 text-white dark:bg-white dark:text-zinc-900 shadow hover:opacity-90"
+                  className="px-4 py-2 rounded-xl bg-gray-900 text-white dark:bg.white dark:text-zinc-900 shadow hover:opacity-90"
                 >
                   Browse…
                 </button>
@@ -213,7 +215,6 @@ export default function App() {
                   Download
                 </button>
 
-                {/* NEW: Generate content setup */}
                 <button
                   onClick={() => {
                     try {
@@ -221,7 +222,7 @@ export default function App() {
                       const fixture = buildFixtureJson(parsed, 2);
                       setFormatted(fixture);
                       setError("");
-                    } catch (e: any) {
+                    } catch (e) {
                       setError(
                         e?.message ||
                           "Failed to transform to content setup fixture."
@@ -245,7 +246,7 @@ export default function App() {
         </section>
 
         <footer className="mt-8 text-xs text-gray-500 dark:text-gray-400">
-          Tip: This Wizard accepts standard JSON or NDJSON (newline‑delimited
+          Tip: This Wizard accepts standard JSON or NDJSON (newline-delimited
           JSON). Later we’ll add a serializer that converts your input into
           Flowless Content setup fixtures.
         </footer>

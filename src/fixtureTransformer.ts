@@ -48,7 +48,8 @@ function stableId(
   const s = `${prefix}::${key}`;
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
-  const hex8 = (h >>> 0).toString(16).padStart(8, "0");
+  let hex8 = (h >>> 0).toString(16);
+  while (hex8.length < 8) hex8 = "0" + hex8;
   const hex12 = (hex8 + hex8).slice(0, 12);
   return `${prefix}-${hex12}`;
 }
