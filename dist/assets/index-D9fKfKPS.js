@@ -9333,7 +9333,7 @@ function $d() {
                   L.jsx("p", {
                     className: "mt-2 text-gray-600 dark:text-gray-300",
                     children:
-                      "Upload or paste JSON. I’ll pretty-print it in the large text area, Then create a content setup",
+                      "Upload or paste JSON. I’ll pretty-print it in the large text area. Then Create Content setup",
                   }),
                 ],
               }),
