@@ -26,7 +26,9 @@ function stableId(prefix, parts) {
     var h = 5381;
     for (var i = 0; i < s.length; i++)
         h = ((h << 5) + h) ^ s.charCodeAt(i);
-    var hex8 = (h >>> 0).toString(16).padStart(8, "0");
+    var hex8 = (h >>> 0).toString(16);
+    while (hex8.length < 8)
+        hex8 = "0" + hex8;
     var hex12 = (hex8 + hex8).slice(0, 12);
     return "".concat(prefix, "-").concat(hex12);
 }
