@@ -1,6 +1,9 @@
-import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-export default defineConfig({
-    plugins: [react()],
-    base: "/mini-setup-wizard/", // Add this line
+import react from "@vitejs/plugin-react";
+export default defineConfig(function (_a) {
+    var mode = _a.mode;
+    return ({
+        plugins: [react()],
+        base: mode === "production" ? "/mini-setup-wizard/" : "/", // ✅ dev=/, prod=/mini-setup-wizard/
+    });
 });

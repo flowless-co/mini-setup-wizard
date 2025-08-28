@@ -128,7 +128,7 @@ export default function App() {
               </h1>
               <p className="mt-2 text-gray-600 dark:text-gray-300">
                 Upload or paste JSON. I’ll pretty-print it in the large text
-                area. (Content setup coming next.) ⏭️
+                area. Then Create Content setup
               </p>
             </div>
           </div>
@@ -247,8 +247,7 @@ export default function App() {
 
         <footer className="mt-8 text-xs text-gray-500 dark:text-gray-400">
           Tip: This Wizard accepts standard JSON or NDJSON (newline-delimited
-          JSON). Later we’ll add a serializer that converts your input into
-          Flowless Content setup fixtures.
+          JSON).
         </footer>
       </div>
     </div>
