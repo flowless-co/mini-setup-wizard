@@ -7,7 +7,6 @@ export default function App() {
   const [error, setError] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [copied, setCopied] = useState(false);
-  const logo = new URL("./assets/flowless-icon.png", import.meta.url).href;
 
   const parseAndFormat = useCallback((text: string) => {
     setError("");
@@ -80,7 +79,7 @@ export default function App() {
     if (!formatted) return;
     await navigator.clipboard.writeText(formatted);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000); // reset after 2s
+    setTimeout(() => setCopied(false), 2000);
   }, [formatted]);
 
   const handleDownload = useCallback(() => {
@@ -110,23 +109,19 @@ export default function App() {
     []
   );
 
-  // @ts-ignore
-  // @ts-ignore
-  // @ts-ignore
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-gray-50 to-white dark:from-zinc-900 dark:to-zinc-950 text-gray-900 dark:text-gray-100">
       <div className="max-w-5xl mx-auto px-4 py-10">
         <header className="mb-8">
           <div className="flex items-center gap-4 sm:gap-5">
             <link rel="icon" type="image/png" href="/flowless-icon.png" />
-
             <div>
               <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">
                 Flowless Setup Wizard 🧙‍♂️
               </h1>
               <p className="mt-2 text-gray-600 dark:text-gray-300">
                 Upload or paste JSON. I’ll pretty-print it in the large text
-                area. Then create content setup
+                area. Then generate your content setup.
               </p>
             </div>
           </div>
@@ -213,12 +208,15 @@ export default function App() {
                   Download
                 </button>
 
-                {/* NEW: Generate content setup */}
+                {/* Generate content setup */}
                 <button
                   onClick={() => {
                     try {
                       const parsed = JSON.parse(rawInput.trim());
-                      const fixture = buildFixtureJson(parsed, 2);
+                      const fixture = buildFixtureJson(parsed, 2, {
+                        fullZoneSuite: true,
+                        keepExisting: true,
+                      });
                       setFormatted(fixture);
                       setError("");
                     } catch (e: any) {
@@ -245,7 +243,7 @@ export default function App() {
         </section>
 
         <footer className="mt-8 text-xs text-gray-500 dark:text-gray-400">
-          Tip: This Wizard accepts standard JSON or NDJSON (newline‑delimited
+          Tip: This Wizard accepts standard JSON or NDJSON (newline-delimited
           JSON).
         </footer>
       </div>
