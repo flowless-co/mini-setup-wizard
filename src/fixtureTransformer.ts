@@ -4,13 +4,13 @@ export type BuildOptions = {
   keepExisting?: boolean;
 };
 
-type FixtureItem = {
+export type FixtureItem = {
   model: string;
   pk: string | number;
   fields: any;
 };
 
-const MODEL = {
+export const MODEL = {
   POLYGON: "fl_monitoring.polygon",
   POINT: "fl_monitoring.point",
   LINK: "fl_monitoring.link",
@@ -89,7 +89,7 @@ function asCoordString(coord: number[] | number[][] | number[][][]) {
 }
 
 /** Strict ID registry: unique string IDs + one global counter for all numeric PKs */
-class IdRegistry {
+export class IdRegistry {
   private usedText: StrSet = {};
   private maxNumericPk = 0;
 
@@ -133,7 +133,7 @@ class IdRegistry {
   }
 }
 
-function pushItem(
+export function pushItem(
   out: FixtureItem[],
   model: string,
   pk: string | number,
