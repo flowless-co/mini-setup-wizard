@@ -1,157 +1,242 @@
-import React, { useMemo, useState } from "react";
-import "./index.css";
+import { useMemo, useState, type CSSProperties } from "react";
+import type { FixtureItem } from "./types";
+import { buildLowLevel } from "./builders/lowLevel";
+import { applyHighLevel } from "./builders/highLevel";
 
-// Your existing builder + IdRegistry
-import { buildFixtureJson, IdRegistry } from "./fixtureTransformer";
-import { applyPages } from "./pages";
+const boxStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 160,
+  resize: "vertical",
+  fontFamily:
+    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  fontSize: 12,
+  lineHeight: 1.45,
+  padding: "10px 12px",
+  border: "1px solid #dcdcdc",
+  borderRadius: 8,
+  background: "#fafafa",
+};
+
+const labelStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  marginBottom: 6,
+};
+const smallBtn: CSSProperties = {
+  fontSize: 12,
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "1px solid #ddd",
+  background: "#fff",
+  cursor: "pointer",
+};
+const primaryBtn: CSSProperties = {
+  fontSize: 14,
+  padding: "8px 14px",
+  borderRadius: 8,
+  border: "1px solid #111",
+  background: "#111",
+  color: "#fff",
+  cursor: "pointer",
+};
+const toolbarStyle: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
 
 export default function App() {
-  // Raw JSON text typed by the user
-  const [raw, setRaw] = useState<string>("");
-  // Parsed input passed to the builder
-  const [input, setInput] = useState<any>([]);
-  // Parse error message (if any)
-  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [input1Text, setInput1Text] = useState<string>("");
+  const [input2Text, setInput2Text] = useState<string>("");
+  const [result, setResult] = useState<FixtureItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // JSON indentation for output
-  const [indent, setIndent] = useState<number>(2);
+  const resultText = useMemo(
+    () => (result ? JSON.stringify(result, null, 2) : ""),
+    [result]
+  );
 
-  // Page checkboxes (start with Leak Overview enabled)
-  const [pages, setPages] = useState<{ leakOverview: boolean }>({
-    leakOverview: true,
-  });
-
-  const toggle = (k: keyof typeof pages) =>
-    setPages((p) => ({ ...p, [k]: !p[k] }));
-
-  const onRawChange: React.ChangeEventHandler<HTMLTextAreaElement> = (e) => {
-    const value = e.target.value;
-    setRaw(value);
-    // Try to parse; if it fails, keep previous parsed input and surface error
-    if (!value.trim()) {
-      setInput([]);
-      setJsonError(null);
-      return;
-    }
+  function parseJsonSafe<T = any>(text: string, name: string): T | null {
+    if (!text.trim()) return null;
     try {
-      const parsed = JSON.parse(value);
-      setInput(parsed);
-      setJsonError(null);
-    } catch (err: any) {
-      setJsonError(err?.message || "Invalid JSON");
+      return JSON.parse(text) as T;
+    } catch (e: any) {
+      throw new Error(`${name} is not valid JSON: ${e?.message ?? e}`);
     }
-  };
+  }
 
-  const output = useMemo(() => {
-    const ids = new IdRegistry();
+  function formatJson(setter: (v: string) => void, src: string) {
+    try {
+      if (!src.trim()) return;
+      const parsed = JSON.parse(src);
+      setter(JSON.stringify(parsed, null, 2));
+    } catch {
+      /* keep raw */
+    }
+  }
 
-    // Your current buildFixtureJson signature expects (input, indent:number)
-    const baseRaw: unknown = buildFixtureJson(input, indent);
-
-    // It may return a string (serialized JSON) or an array.
-    let baseArr: any[] = [];
-    if (Array.isArray(baseRaw)) {
-      baseArr = baseRaw as any[];
-    } else {
-      try {
-        baseArr = JSON.parse(String(baseRaw));
-      } catch {
-        baseArr = [];
+  function onBuild(): void {
+    setError(null);
+    setResult(null);
+    try {
+      const input1 = parseJsonSafe<any[]>(input1Text, "Input 1 (low level)");
+      const input2 =
+        parseJsonSafe<any[]>(input2Text, "Input 2 (high level)") ?? [];
+      if (!Array.isArray(input1)) {
+        throw new Error("Input 1 must be a JSON array of domain items.");
       }
+      const low = buildLowLevel(input1, { strictFlowReading: true });
+      const high = applyHighLevel(low, input2);
+      const finalOut = [...low, ...high];
+      setResult(finalOut);
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
     }
+  }
 
-    // Apply page layer (adds page settings + charts + cards and connects them)
-    applyPages(baseArr, ids, pages);
+  function onCopy(text: string): void {
+    void navigator.clipboard?.writeText(text).catch(() => {});
+  }
 
-    return JSON.stringify(baseArr, null, indent);
-  }, [input, indent, pages]);
-
-  const download = () => {
-    const blob = new Blob([output], {
-      type: "application/json;charset=utf-8",
+  function onDownload(): void {
+    if (!result) return;
+    const blob = new Blob([JSON.stringify(result, null, 2)], {
+      type: "application/json",
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "result.json";
-    document.body.appendChild(a);
+    a.download = "fixture.json";
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900">
-      <div className="max-w-5xl mx-auto py-8 px-4">
-        <h1 className="text-2xl font-bold mb-4">Mini Setup Wizard</h1>
-
-        {/* Pages */}
-        <div className="rounded-lg bg-white border p-4 mb-4">
-          <h2 className="text-lg font-semibold mb-3">Pages</h2>
-          <label className="flex items-center gap-2 mb-2">
-            <input
-              type="checkbox"
-              checked={pages.leakOverview}
-              onChange={() => toggle("leakOverview")}
-            />
-            <span>Leak Overview (Leak Inspector)</span>
-          </label>
-          <p className="text-xs text-gray-500">
-            Adds page settings, charts, cards, and connects them to metrics.
-          </p>
+    <div style={{ maxWidth: 1200, margin: "0 auto", padding: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>
+            Mini Setup Wizard — Builder
+          </h1>
+          <div style={{ color: "#666", fontSize: 12 }}>
+            Paste JSON → Build → Copy or Download
+          </div>
         </div>
 
-        {/* JSON indent */}
-        <div className="rounded-lg bg-white border p-4 mb-4">
-          <label className="block text-sm font-medium mb-1">JSON indent</label>
-          <input
-            type="number"
-            min={0}
-            max={8}
-            value={indent}
-            onChange={(e) => setIndent(parseInt(e.target.value || "2", 10))}
-            className="border rounded px-2 py-1 w-24"
-          />
-        </div>
+        <button
+          style={{ ...smallBtn, opacity: result ? 1 : 0.5 }}
+          onClick={onDownload}
+          disabled={!result}
+          title={result ? "Download fixture.json" : "Build first"}
+        >
+          ⬇ Download
+        </button>
+      </div>
 
-        {/* Text input for domain JSON */}
-        <div className="rounded-lg bg-white border p-4 mb-4">
-          <label className="block text-sm font-medium mb-2">
-            Domain input (paste JSON here)
-          </label>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 16,
+          alignItems: "start",
+        }}
+      >
+        <div>
+          <div style={labelStyle}>Input 1 — Low Level (paste input_1.json)</div>
           <textarea
-            value={raw}
-            onChange={onRawChange}
-            placeholder='Example: [{"category":"zone","coords":[[[35,31.6],[35.01,31.6],[35.01,31.61],[35,31.61],[35,31.6]]],"label":"Zone A"}]'
-            className="w-full h-[200px] font-mono text-xs border rounded p-3"
+            placeholder='[ { "category": "zone", "label": "Zone A", "coords": [[[35,31.6],[...]]] }, ... ]'
+            value={input1Text}
+            onChange={(e) => setInput1Text(e.target.value)}
+            style={boxStyle}
+            spellCheck={false}
           />
-          {jsonError ? (
-            <div className="mt-2 text-xs text-red-600">
-              JSON Error: {jsonError}
-            </div>
-          ) : (
-            <div className="mt-2 text-xs text-gray-500">
-              Tip: You can paste either an object or an array.
-            </div>
-          )}
-        </div>
-
-        {/* Output */}
-        <div className="rounded-lg bg-white border p-4 mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-lg font-semibold">Output (loaddata)</h2>
+          <div style={toolbarStyle}>
             <button
-              onClick={download}
-              className="px-3 py-1 rounded bg-black text-white text-sm"
+              style={smallBtn}
+              onClick={() => formatJson(setInput1Text, input1Text)}
             >
-              Download JSON
+              Format JSON
+            </button>
+            <button style={smallBtn} onClick={() => setInput1Text("")}>
+              Clear
             </button>
           </div>
+        </div>
+
+        <div>
+          <div style={labelStyle}>
+            Input 2 — High Level (paste input_2.json)
+          </div>
           <textarea
-            value={output}
-            readOnly
-            className="w-full h-[420px] font-mono text-xs border rounded p-3"
+            placeholder='// Template with descriptors e.g. "MetricCategory.Zone.zone_demand.daily"'
+            value={input2Text}
+            onChange={(e) => setInput2Text(e.target.value)}
+            style={boxStyle}
+            spellCheck={false}
           />
+          <div style={toolbarStyle}>
+            <button
+              style={smallBtn}
+              onClick={() => formatJson(setInput2Text, input2Text)}
+            >
+              Format JSON
+            </button>
+            <button style={smallBtn} onClick={() => setInput2Text("")}>
+              Clear
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}
+      >
+        <button style={primaryBtn} onClick={onBuild}>
+          Build Fixture
+        </button>
+        {error && (
+          <span style={{ color: "#b00020", fontSize: 13 }}>{error}</span>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <div style={labelStyle}>
+          Output — loaddata JSON{" "}
+          <span style={{ fontWeight: 400, color: "#888" }}>
+            (copy-paste ready)
+          </span>
+        </div>
+        <textarea
+          readOnly
+          value={resultText}
+          placeholder="// Build to see output here"
+          style={{ ...boxStyle, minHeight: 280 }}
+          spellCheck={false}
+        />
+        <div style={toolbarStyle}>
+          <button
+            style={{ ...smallBtn, opacity: result ? 1 : 0.5 }}
+            onClick={() => onCopy(resultText)}
+            disabled={!result}
+          >
+            Copy Output
+          </button>
+          <button
+            style={{ ...smallBtn, opacity: result ? 1 : 0.5 }}
+            onClick={onDownload}
+            disabled={!result}
+          >
+            Download fixture.json
+          </button>
         </div>
       </div>
     </div>
