@@ -1,242 +1,370 @@
-import { useMemo, useState, type CSSProperties } from "react";
-import type { FixtureItem } from "./types";
+import React, { useEffect, useMemo, useState } from "react";
 import { buildLowLevel } from "./builders/lowLevel";
 import { applyHighLevel } from "./builders/highLevel";
+import type { FixtureItem } from "./types";
 
-const boxStyle: CSSProperties = {
-  width: "100%",
-  minHeight: 160,
-  resize: "vertical",
-  fontFamily:
-    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12,
-  lineHeight: 1.45,
-  padding: "10px 12px",
-  border: "1px solid #dcdcdc",
-  borderRadius: 8,
-  background: "#fafafa",
-};
+/* ------------------------ Lenient JSON utilities ------------------------ */
+function stripComments(src: string): string {
+  return src
+    .replace(/^\uFEFF/, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+function stripTrailingCommas(src: string): string {
+  return src.replace(/,\s*([}\]])/g, "$1");
+}
+function parseLenientJSON<T = any>(text: string): T {
+  const t = text.trim();
+  if (!t) return [] as unknown as T;
+  try {
+    return JSON.parse(t);
+  } catch {
+    const cleaned = stripTrailingCommas(stripComments(t));
+    return JSON.parse(cleaned);
+  }
+}
 
-const labelStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 600,
-  marginBottom: 6,
-};
-const smallBtn: CSSProperties = {
-  fontSize: 12,
-  padding: "6px 10px",
-  borderRadius: 8,
-  border: "1px solid #ddd",
-  background: "#fff",
-  cursor: "pointer",
-};
-const primaryBtn: CSSProperties = {
-  fontSize: 14,
-  padding: "8px 14px",
-  borderRadius: 8,
-  border: "1px solid #111",
-  background: "#111",
-  color: "#fff",
-  cursor: "pointer",
-};
-const toolbarStyle: CSSProperties = {
-  display: "flex",
-  gap: 8,
-  alignItems: "center",
-  flexWrap: "wrap",
-};
+/* ------------------------- Page choices from Input2 ------------------------- */
+type PageChoice = { code: string; label: string };
 
+/** Prefer fields.section.{code,label}; fallback to fields.page if section missing */
+function getPageChoicesFromAbstractions(abs: any[]): PageChoice[] {
+  const out: PageChoice[] = [];
+  const seen = new Set<string>();
+  const list = Array.isArray(abs) ? abs : [];
+
+  for (const a of list) {
+    if (a?.model !== "fl_page_settings.pagesettings") continue;
+
+    const fields = a.fields ?? {};
+    const sectionObj =
+      fields.section ?? fields?.args?.section ?? a?.args?.section ?? null;
+
+    let code: string | null = null;
+    let label: string | null = null;
+
+    if (sectionObj && typeof sectionObj === "object") {
+      code = sectionObj.code ?? null;
+      label = sectionObj.label ?? sectionObj.code ?? null;
+    }
+
+    // Fallback to page only if section entirely missing
+    if (!code) {
+      const pageObj =
+        fields.page ?? fields?.args?.page ?? a?.args?.page ?? null;
+      if (typeof pageObj === "string") {
+        code = pageObj;
+        label = pageObj;
+      } else if (pageObj && typeof pageObj === "object") {
+        code = pageObj.code ?? null;
+        label = pageObj.label ?? pageObj.code ?? null;
+      }
+    }
+
+    if (!code) continue;
+    const key = String(code);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    out.push({ code: key, label: String(label ?? key) });
+  }
+
+  out.sort((a, b) => a.label.localeCompare(b.label));
+  return out;
+}
+
+/* ----------------------------- Download helper ----------------------------- */
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ================================== App ================================== */
 export default function App() {
   const [input1Text, setInput1Text] = useState<string>("");
   const [input2Text, setInput2Text] = useState<string>("");
-  const [result, setResult] = useState<FixtureItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [selectedPageCodes, setSelectedPageCodes] = useState<Set<string>>(
+    new Set()
+  );
+  const [outputText, setOutputText] = useState<string>("");
+  const [errors, setErrors] = useState<string | null>(null);
 
-  const resultText = useMemo(
-    () => (result ? JSON.stringify(result, null, 2) : ""),
-    [result]
+  // Parse Input 2 (abstractions) leniently
+  const abstractions: any[] = useMemo(() => {
+    if (!input2Text.trim()) return [];
+    try {
+      return parseLenientJSON<any[]>(input2Text);
+    } catch (e: any) {
+      // keep silent here; we surface errors only on Build
+      return [];
+    }
+  }, [input2Text]);
+
+  // Derive page choices from section.code/label
+  const pageChoices = useMemo(
+    () => getPageChoicesFromAbstractions(abstractions),
+    [abstractions]
   );
 
-  function parseJsonSafe<T = any>(text: string, name: string): T | null {
-    if (!text.trim()) return null;
-    try {
-      return JSON.parse(text) as T;
-    } catch (e: any) {
-      throw new Error(`${name} is not valid JSON: ${e?.message ?? e}`);
-    }
-  }
+  // Default-select all detected pages whenever the list changes
+  useEffect(() => {
+    setSelectedPageCodes(new Set(pageChoices.map((p) => p.code)));
+  }, [pageChoices.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function formatJson(setter: (v: string) => void, src: string) {
-    try {
-      if (!src.trim()) return;
-      const parsed = JSON.parse(src);
-      setter(JSON.stringify(parsed, null, 2));
-    } catch {
-      /* keep raw */
-    }
-  }
-
-  function onBuild(): void {
-    setError(null);
-    setResult(null);
-    try {
-      const input1 = parseJsonSafe<any[]>(input1Text, "Input 1 (low level)");
-      const input2 =
-        parseJsonSafe<any[]>(input2Text, "Input 2 (high level)") ?? [];
-      if (!Array.isArray(input1)) {
-        throw new Error("Input 1 must be a JSON array of domain items.");
-      }
-      const low = buildLowLevel(input1, { strictFlowReading: true });
-      const high = applyHighLevel(low, input2);
-      const finalOut = [...low, ...high];
-      setResult(finalOut);
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
-    }
-  }
-
-  function onCopy(text: string): void {
-    void navigator.clipboard?.writeText(text).catch(() => {});
-  }
-
-  function onDownload(): void {
-    if (!result) return;
-    const blob = new Blob([JSON.stringify(result, null, 2)], {
-      type: "application/json",
+  function togglePage(code: string) {
+    setSelectedPageCodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "fixture.json";
-    a.click();
-    URL.revokeObjectURL(url);
+  }
+
+  function selectAllPages(on: boolean) {
+    if (on) setSelectedPageCodes(new Set(pageChoices.map((p) => p.code)));
+    else setSelectedPageCodes(new Set());
+  }
+
+  function build() {
+    setErrors(null);
+    try {
+      // 1) Parse Input 1
+      const lowInput = parseLenientJSON<any[]>(input1Text);
+
+      // 2) Build low-level
+      const lowData: FixtureItem[] = buildLowLevel(lowInput);
+
+      // 3) Build high-level scoped by selected section.codes
+      const selectedPages = Array.from(selectedPageCodes);
+      const highData: FixtureItem[] = applyHighLevel(
+        lowData,
+        abstractions,
+        selectedPages
+      );
+
+      // 4) Final fixture
+      const finalData = [...lowData, ...highData];
+      const txt = JSON.stringify(finalData, null, 2);
+      setOutputText(txt);
+    } catch (e: any) {
+      setErrors(e?.message || String(e));
+      setOutputText("");
+    }
   }
 
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto", padding: 16 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: 16,
-        }}
-      >
-        <div>
-          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>
-            Mini Setup Wizard — Builder
-          </h1>
-          <div style={{ color: "#666", fontSize: 12 }}>
-            Paste JSON → Build → Copy or Download
-          </div>
-        </div>
+    <div
+      style={{
+        fontFamily: "Inter, system-ui, sans-serif",
+        padding: 16,
+        maxWidth: 1400,
+        margin: "0 auto",
+      }}
+    >
+      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
+        Mini Setup Wizard
+      </h1>
+      <p style={{ color: "#666", marginBottom: 16 }}>
+        Paste <b>Input 1</b> (low) and <b>Input 2</b> (abstractions). Sections
+        found in Input&nbsp;2 appear as checkboxes (from{" "}
+        <code>fields.section.code/label</code>).
+      </p>
 
-        <button
-          style={{ ...smallBtn, opacity: result ? 1 : 0.5 }}
-          onClick={onDownload}
-          disabled={!result}
-          title={result ? "Download fixture.json" : "Build first"}
-        >
-          ⬇ Download
-        </button>
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 16,
-          alignItems: "start",
-        }}
-      >
-        <div>
-          <div style={labelStyle}>Input 1 — Low Level (paste input_1.json)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        {/* Left: Inputs & selectors */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <label style={{ fontWeight: 600 }}>Input 1 (low-level source)</label>
           <textarea
-            placeholder='[ { "category": "zone", "label": "Zone A", "coords": [[[35,31.6],[...]]] }, ... ]'
             value={input1Text}
             onChange={(e) => setInput1Text(e.target.value)}
-            style={boxStyle}
-            spellCheck={false}
+            placeholder="Paste input_1.json here"
+            style={{
+              width: "100%",
+              minHeight: 220,
+              padding: 10,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              borderRadius: 8,
+              border: "1px solid #ddd",
+            }}
           />
-          <div style={toolbarStyle}>
-            <button
-              style={smallBtn}
-              onClick={() => formatJson(setInput1Text, input1Text)}
-            >
-              Format JSON
-            </button>
-            <button style={smallBtn} onClick={() => setInput1Text("")}>
-              Clear
-            </button>
-          </div>
-        </div>
 
-        <div>
-          <div style={labelStyle}>
-            Input 2 — High Level (paste input_2.json)
-          </div>
+          <label style={{ fontWeight: 600, marginTop: 12 }}>
+            Input 2 (abstractions)
+          </label>
           <textarea
-            placeholder='// Template with descriptors e.g. "MetricCategory.Zone.zone_demand.daily"'
             value={input2Text}
             onChange={(e) => setInput2Text(e.target.value)}
-            style={boxStyle}
-            spellCheck={false}
+            placeholder="Paste input_2.json here"
+            style={{
+              width: "100%",
+              minHeight: 220,
+              padding: 10,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              borderRadius: 8,
+              border: "1px solid #ddd",
+            }}
           />
-          <div style={toolbarStyle}>
-            <button
-              style={smallBtn}
-              onClick={() => formatJson(setInput2Text, input2Text)}
+
+          <div
+            style={{
+              background: "#fafafa",
+              border: "1px solid #eee",
+              borderRadius: 8,
+              padding: 12,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
             >
-              Format JSON
-            </button>
-            <button style={smallBtn} onClick={() => setInput2Text("")}>
-              Clear
+              <strong>Sections from Input 2</strong>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => selectAllPages(true)}
+                  style={{
+                    padding: "4px 8px",
+                    border: "1px solid #ddd",
+                    borderRadius: 6,
+                    background: "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  Select all
+                </button>
+                <button
+                  onClick={() => selectAllPages(false)}
+                  style={{
+                    padding: "4px 8px",
+                    border: "1px solid #ddd",
+                    borderRadius: 6,
+                    background: "#fff",
+                    cursor: "pointer",
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {pageChoices.length === 0 ? (
+              <div style={{ color: "#888" }}>No sections detected yet.</div>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))",
+                  gap: 6,
+                }}
+              >
+                {pageChoices.map((p) => (
+                  <label
+                    key={p.code}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: 6,
+                      borderRadius: 6,
+                      cursor: "pointer",
+                    }}
+                    title={p.code}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedPageCodes.has(p.code)}
+                      onChange={() => togglePage(p.code)}
+                    />
+                    <span>
+                      {p.label}{" "}
+                      <span style={{ color: "#888" }}>({p.code})</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <button
+              onClick={build}
+              style={{
+                marginTop: 10,
+                padding: "8px 14px",
+                border: "1px solid #0a7",
+                background: "#0a7",
+                color: "#fff",
+                borderRadius: 8,
+                cursor: "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Build
             </button>
           </div>
-        </div>
-      </div>
 
-      <div
-        style={{ marginTop: 16, display: "flex", gap: 8, alignItems: "center" }}
-      >
-        <button style={primaryBtn} onClick={onBuild}>
-          Build Fixture
-        </button>
-        {error && (
-          <span style={{ color: "#b00020", fontSize: 13 }}>{error}</span>
-        )}
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <div style={labelStyle}>
-          Output — loaddata JSON{" "}
-          <span style={{ fontWeight: 400, color: "#888" }}>
-            (copy-paste ready)
-          </span>
+          {errors && (
+            <div
+              style={{
+                marginTop: 10,
+                color: "#b00020",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              <strong>Error:</strong> {errors}
+            </div>
+          )}
         </div>
-        <textarea
-          readOnly
-          value={resultText}
-          placeholder="// Build to see output here"
-          style={{ ...boxStyle, minHeight: 280 }}
-          spellCheck={false}
-        />
-        <div style={toolbarStyle}>
-          <button
-            style={{ ...smallBtn, opacity: result ? 1 : 0.5 }}
-            onClick={() => onCopy(resultText)}
-            disabled={!result}
+
+        {/* Right: Output with small download button */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
           >
-            Copy Output
-          </button>
-          <button
-            style={{ ...smallBtn, opacity: result ? 1 : 0.5 }}
-            onClick={onDownload}
-            disabled={!result}
-          >
-            Download fixture.json
-          </button>
+            <label style={{ fontWeight: 600 }}>
+              Output (combined loaddata)
+            </label>
+            <button
+              onClick={() => downloadTextFile("data.json", outputText || "[]")}
+              style={{
+                padding: "6px 10px",
+                border: "1px solid #ccc",
+                background: "#fff",
+                borderRadius: 8,
+                cursor: "pointer",
+              }}
+              title="Download"
+            >
+              ⤓
+            </button>
+          </div>
+          <textarea
+            value={outputText}
+            onChange={(e) => setOutputText(e.target.value)}
+            placeholder="Output will appear here after Build"
+            style={{
+              width: "100%",
+              minHeight: 520,
+              padding: 10,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              borderRadius: 8,
+              border: "1px solid #ddd",
+            }}
+          />
         </div>
       </div>
     </div>
