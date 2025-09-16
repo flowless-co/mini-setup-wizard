@@ -1,283 +1,940 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type {
-  InputItem,
+import {
   FixtureItem,
-  BuildOptions,
-  Coord,
-  Polygon,
+  AuthorV2,
+  ExtraMetricConfig,
+  ExtraMetricKind,
 } from "../types";
-import { IdRegistry } from "./ids";
-import { pointInPolygon } from "./geo";
 
-const DEFAULT_FIELDS = {
-  factor: 1,
-  offset: 0,
-  source: "FORMULA",
-  data_type: "ANALOG",
-  value_range: [] as any[],
-  is_optimized: false,
-  storage_table: 68,
-  aggregation_type: "gauge",
-  pulse_round_down: false,
-  histogram_interval: { days: 0, hours: 0, minutes: 0 },
+/** ---------- ID helpers ---------- **/
+function hex12(): string {
+  const ts = Math.floor(Date.now() / 1000)
+    .toString(16)
+    .padStart(6, "0");
+  const rnd = Math.floor(Math.random() * 0xffffff)
+    .toString(16)
+    .padStart(6, "0");
+  return (ts + rnd).slice(0, 12);
+}
+function gen(prefix: "m" | "t" | "p" | "pl"): string {
+  return `${prefix}-${hex12()}`;
+}
+// Global numeric PK for links to avoid collisions across zones
+let linkSeq = 0;
+
+/** ---------- Deterministic calc metric_id helper ---------- **/
+function h32(s: string, seed = 0x811c9dc5): number {
+  let h = seed >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+function calcMetricId(seed: string): string {
+  const a = h32(seed + "#1");
+  const b = h32(seed + "#2", 0x12345678);
+  const c = h32(seed + "#3", 0x9e3779b9);
+  const d = h32(seed + "#4", 0x7f4a7c15);
+  const part = (x: number) => x.toString(16).padStart(8, "0");
+  return `${part(a)}-${part(b)}-${part(c)}-${part(d)}`;
+}
+
+/** ---------- geometry & interval helpers ---------- **/
+type Coord = [number, number];
+type Ring = Coord[];
+type Polygon = Ring[];
+
+function toCoord(v: any): Coord {
+  if (Array.isArray(v) && v.length >= 2) return [Number(v[0]), Number(v[1])];
+  throw new Error("Bad coord");
+}
+function toPolygon(v: any): Polygon {
+  if (!Array.isArray(v) || v.length === 0) throw new Error("Bad polygon");
+  if (Array.isArray(v[0]) && typeof v[0][0] === "number") return [v as Ring];
+  return v as Polygon;
+}
+
+const INTERVAL_RANK: Record<string, number> = {
+  QUARTER_HOUR: 0,
+  HOURLY: 1,
+  DAILY: 2,
+};
+function rankInterval(iv: string): number {
+  return INTERVAL_RANK[String(iv).toUpperCase()] ?? 0;
+}
+function aggGroupsForInterval(toInterval: string): string[] {
+  const up = String(toInterval).toUpperCase();
+  if (up === "HOURLY") return ["HOUR"];
+  if (up === "DAILY") return ["DAY"];
+  return [];
+}
+function minutesForInterval(interval: string): number {
+  const up = String(interval).toUpperCase();
+  if (up === "QUARTER_HOUR") return 15;
+  if (up === "HOURLY") return 60;
+  if (up === "DAILY") return 1440;
+  // default to quarter-hour if unknown
+  return 15;
+}
+
+/** ---------- compilation indexes ---------- **/
+type MeterIdx = {
+  pointId: string;
+  unit: string;
+  interval: string;
+  label: string;
+  // optional based on meter type:
+  readingMetricId?: string;
+  volumeMetricId?: string;
+  rateMetricId?: string;
+  extras?: Partial<Record<ExtraMetricKind, string>>;
+};
+type PressureIdx = {
+  pointId: string;
+  pressureMetricId: string;
+  unit: string;
+  interval: string;
+  label: string;
+  extras?: Partial<Record<ExtraMetricKind, string>>;
+};
+type ZoneIdx = {
+  polygonId: string;
+  label: string;
 };
 
-// tuple coercers (avoid array->tuple type issues)
-function toCoord(v: any): Coord {
-  return [Number(v?.[0]), Number(v?.[1])] as Coord;
-}
-function toPolygon(poly: any): Polygon {
-  return (poly ?? []).map((ring: any) =>
-    (ring ?? []).map((c: any) => toCoord(c))
-  ) as Polygon;
-}
+type Ctx = {
+  out: FixtureItem[];
+  metersByLabel: Map<string, MeterIdx>;
+  pressureByLabel: Map<string, PressureIdx>;
+  zonesByLabel: Map<string, ZoneIdx>;
+};
 
-export function buildLowLevel(
-  input: InputItem[],
-  _opts: BuildOptions = {}
-): FixtureItem[] {
-  const out: FixtureItem[] = [];
-  const ids = new IdRegistry();
-
-  const zones: { id: string; label: string; poly: Polygon }[] = [];
-  const points: {
-    id: string;
-    label: string;
-    coord: Coord;
-    category: string;
-  }[] = [];
-
-  const push = (model: string, pk: string | number, fields: any) => {
-    out.push({ model, pk, fields });
-    return pk;
+/** ---------- main ---------- **/
+export function buildLowLevel(input: AuthorV2[]): FixtureItem[] {
+  const ctx: Ctx = {
+    out: [],
+    metersByLabel: new Map(),
+    pressureByLabel: new Map(),
+    zonesByLabel: new Map(),
   };
 
-  // 1) polygons & points
-  for (const item of input) {
-    if (item.category === "zone") {
-      const plId = ids.make("pl");
-      const poly = toPolygon(item.coords);
-      zones.push({ id: plId, label: item.label, poly });
-      push("fl_monitoring.polygon", plId, {
-        id: plId,
-        tags: "[]",
-        coord: poly,
-        label: item.label,
-        notes: item.label,
-        coords: JSON.stringify(poly),
-        category: "zone",
-      });
-    } else if (
-      item.category === "flow_meter" ||
-      item.category === "pressure_sensor"
-    ) {
-      const pId = ids.make("p");
-      const coord = toCoord(item.coords);
-      points.push({
-        id: pId,
-        label: item.label,
-        coord,
-        category: item.category,
-      });
-      push("fl_monitoring.point", pId, {
-        id: pId,
-        tags: "[]",
-        coord,
-        label: item.label,
-        notes: item.label,
-        category: item.category,
-      });
+  // Pass 1: targets + direct metrics
+  for (const node of input) {
+    if (node.type === "flowMeterWithReading") {
+      compileFlowMeterWithReading(ctx, node);
+    } else if (node.type === "flowMeterWithVolume") {
+      compileFlowMeterWithVolume(ctx, node);
+    } else if (node.type === "flowMeterWithRate") {
+      compileFlowMeterWithRate(ctx, node);
+    } else if (node.type === "pressureSensor") {
+      compilePressureSensor(ctx, node);
+    } else if (node.type === "zone") {
+      compileZoneTarget(ctx, node);
     }
   }
 
-  // 2) links: flow_meter_in_zone by geometry
-  let linkSeq = 1;
-  for (const fm of points.filter((p) => p.category === "flow_meter")) {
-    const z = zones.find((zz) => pointInPolygon(fm.coord, zz.poly));
-    if (z) {
-      const pk = linkSeq++;
-      push("fl_monitoring.link", pk, {
-        id: pk,
-        args: { role: ["inlet"], order: null },
-        notes: "",
-        target_id1: fm.id,
-        target_id2: z.id,
-        relation_type: "flow_meter_in_zone",
-      });
+  // Pass 2: wiring (zones)
+  for (const node of input) {
+    if (node.type !== "zone") continue;
+    wireZoneDependencies(ctx, node);
+  }
+
+  return ctx.out;
+}
+
+/** ---------- emit extra metrics (battery / signal / status) ---------- **/
+function emitExtraMetrics(
+  ctx: Ctx,
+  pointId: string,
+  deviceLabel: string,
+  extras: ExtraMetricConfig[] | undefined,
+  _fallbackInterval: string
+): Partial<Record<ExtraMetricKind, string>> | undefined {
+  if (!extras || extras.length === 0) return undefined;
+
+  const out: Partial<Record<ExtraMetricKind, string>> = {};
+
+  for (const cfg of extras) {
+    const kind = cfg.kind;
+    const interval = cfg.interval ?? "HOURLY";
+    const label = cfg.label ?? defaultExtraLabel(kind, deviceLabel);
+
+    let category: string;
+    let unit = cfg.unit;
+    // Defaults per kind
+    if (kind === "battery") {
+      category = "battery_level";
+      unit = unit ?? "%";
+    } else if (kind === "signal") {
+      category = "signal_strength";
+      unit = unit ?? "dBm";
+    } else {
+      category = "status";
+      unit = unit ?? "";
     }
-  }
 
-  // 3) starter metrics
-  function addMetric(fields: any): string {
-    const mId = ids.make("m");
-    const merged = { ...DEFAULT_FIELDS, ...fields, id: mId };
-    push("fl_monitoring.metricdefinition", mId, merged);
-    return mId;
-  }
-
-  // per zone: Demand (QH), AZP (QH)
-  const demandByZone = new Map<string, string>();
-  const azpByZone = new Map<string, string>();
-  for (const z of zones) {
-    const demandId = addMetric({
-      unit: "m³/h",
-      label: `Zone Demand – ${z.label}`,
-      category: "zone_demand",
-      interval: "QUARTER_HOUR",
-      describes: "QUARTER_HOUR",
-      tags_list: ["sum_aggregated"],
-      target_id: z.id,
+    const mId = gen("m");
+    ctx.out.push({
+      model: "fl_monitoring.metricdefinition",
+      pk: mId,
+      fields: {
+        factor: 1,
+        offset: 0,
+        source: "USER",
+        data_type: "ANALOG",
+        value_range: [],
+        is_optimized: false,
+        storage_table: 68,
+        aggregation_type: "gauge",
+        pulse_round_down: false,
+        histogram_interval: { days: 0, hours: 0, minutes: 0 },
+        unit,
+        label,
+        category,
+        interval,
+        describes: interval,
+        tags_list: cfg.tags ?? ["raw_data"],
+        target_id: pointId,
+        id: mId,
+      },
     });
-    demandByZone.set(z.id, demandId);
 
-    const azpId = addMetric({
-      unit: "m",
-      label: `AZP – ${z.label}`,
-      category: "average_zone_pressure",
-      interval: "QUARTER_HOUR",
-      describes: "QUARTER_HOUR",
-      tags_list: ["avg_aggregated"],
-      target_id: z.id,
-    });
-    azpByZone.set(z.id, azpId);
+    out[kind] = mId;
   }
 
-  // per flow meter: reading + volume + delta trigger
-  const fmVolumePerZone = new Map<string, string[]>();
-  for (const fm of points.filter((p) => p.category === "flow_meter")) {
-    const z = zones.find((zz) => pointInPolygon(fm.coord, zz.poly));
-    if (z && !fmVolumePerZone.has(z.id)) fmVolumePerZone.set(z.id, []);
+  return Object.keys(out).length ? out : undefined;
+}
 
-    const readingMetricId = addMetric({
-      unit: "m³",
-      label: `Flow Reading – ${fm.label}`,
+function defaultExtraLabel(kind: ExtraMetricKind, deviceLabel: string): string {
+  if (kind === "battery") return `Battery – ${deviceLabel}`;
+  if (kind === "signal") return `Signal – ${deviceLabel}`;
+  return `Status – ${deviceLabel}`;
+}
+
+/** ---------- handlers ---------- **/
+
+// 1) flowMeterWithReading → point + flow_reading + flow_volume + DELTA trigger (+extras)
+function compileFlowMeterWithReading(
+  ctx: Ctx,
+  n: Extract<AuthorV2, { type: "flowMeterWithReading" }>
+) {
+  const pId = gen("p");
+  const coord = toCoord(n.coords);
+  ctx.out.push({
+    model: "fl_monitoring.point",
+    pk: pId,
+    fields: {
+      id: pId,
+      tags: "[]",
+      coord,
+      label: n.label,
+      notes: n.label,
+      category: "flow_meter",
+    },
+  });
+
+  // flow_reading
+  const mRead = gen("m");
+  ctx.out.push({
+    model: "fl_monitoring.metricdefinition",
+    pk: mRead,
+    fields: {
+      factor: 1,
+      offset: 0,
       source: "USER",
+      data_type: "ANALOG",
+      value_range: [],
+      is_optimized: false,
+      storage_table: 68,
+      aggregation_type: "gauge",
+      pulse_round_down: false,
+      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      unit: n.unit,
+      label: `Flow Reading – ${n.label}`,
       category: "flow_reading",
-      interval: "QUARTER_HOUR",
-      describes: "QUARTER_HOUR",
+      interval: n.interval,
+      describes: n.interval,
       tags_list: ["raw_data"],
-      target_id: fm.id,
-    });
+      target_id: pId,
+      id: mRead,
+    },
+  });
 
-    const volumeMetricId = addMetric({
-      unit: "m³",
-      label: `Flow Volume – ${fm.label}`,
+  // flow_volume (formula from delta)
+  const mVol = gen("m");
+  ctx.out.push({
+    model: "fl_monitoring.metricdefinition",
+    pk: mVol,
+    fields: {
+      factor: 1,
+      offset: 0,
+      source: "FORMULA",
+      data_type: "ANALOG",
+      value_range: [],
+      is_optimized: false,
+      storage_table: 68,
+      aggregation_type: "gauge",
+      pulse_round_down: false,
+      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      unit: n.unit,
+      label: `Flow Volume – ${n.label}`,
       category: "flow_volume",
-      interval: "QUARTER_HOUR",
-      describes: "QUARTER_HOUR",
+      interval: n.interval,
+      describes: n.interval,
       tags_list: ["sum_aggregated"],
-      target_id: fm.id,
-    });
+      target_id: pId,
+      id: mVol,
+    },
+  });
 
-    if (z) fmVolumePerZone.get(z.id)!.push(volumeMetricId);
-
-    const tId = ids.make("t");
-    push("fl_dispatcher.metrictrigger", tId, {
-      id: tId,
+  // DELTA(reading) → volume
+  const t = gen("t");
+  ctx.out.push({
+    model: "fl_dispatcher.metrictrigger",
+    pk: t,
+    fields: {
+      id: t,
       caller: "REAL_TIME",
       is_active: true,
       calculator: "",
       calculators: [
         {
+          calc_name: "CALCULATE_DELTA",
           calc_args: {
             inputs: {},
-            metric_id: ids.guid(),
             time_range_type: "operation",
+            metric_id: calcMetricId(`${mVol}|CALCULATE_DELTA|${n.label}`),
           },
-          calc_name: "CALCULATE_DELTA",
         },
       ],
-      description: `Compute Flow Volume – ${fm.label}`,
+      description: `Flow Volume – ${n.label}`,
       schedule_job: "",
-      input_metrics: [readingMetricId],
-      output_metric: volumeMetricId,
-    });
-  }
+      input_metrics: [mRead],
+      output_metric: mVol,
+    },
+  });
 
-  // per pressure sensor: pressure metric
-  for (const ps of points.filter((p) => p.category === "pressure_sensor")) {
-    addMetric({
-      unit: "m",
-      label: `Pressure – ${ps.label}`,
-      category: "pressure",
-      interval: "QUARTER_HOUR",
-      describes: "QUARTER_HOUR",
+  const extras = emitExtraMetrics(ctx, pId, n.label, n.extras, n.interval);
+
+  ctx.metersByLabel.set(n.label, {
+    pointId: pId,
+    readingMetricId: mRead,
+    volumeMetricId: mVol,
+    unit: n.unit,
+    interval: n.interval,
+    label: n.label,
+    extras,
+  });
+}
+
+// 2) flowMeterWithVolume → point + flow_volume (+extras)
+function compileFlowMeterWithVolume(
+  ctx: Ctx,
+  n: Extract<AuthorV2, { type: "flowMeterWithVolume" }>
+) {
+  const pId = gen("p");
+  const coord = toCoord(n.coords);
+  ctx.out.push({
+    model: "fl_monitoring.point",
+    pk: pId,
+    fields: {
+      id: pId,
+      tags: "[]",
+      coord,
+      label: n.label,
+      notes: n.label,
+      category: "flow_meter",
+    },
+  });
+
+  const mVol = gen("m");
+  ctx.out.push({
+    model: "fl_monitoring.metricdefinition",
+    pk: mVol,
+    fields: {
+      factor: 1,
+      offset: 0,
+      source: "USER", // direct volume
+      data_type: "ANALOG",
+      value_range: [],
+      is_optimized: false,
+      storage_table: 68,
+      aggregation_type: "gauge",
+      pulse_round_down: false,
+      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      unit: n.unit,
+      label: `Flow Volume – ${n.label}`,
+      category: "flow_volume",
+      interval: n.interval,
+      describes: n.interval,
+      tags_list: ["sum_aggregated"],
+      target_id: pId,
+      id: mVol,
+    },
+  });
+
+  const extras = emitExtraMetrics(ctx, pId, n.label, n.extras, n.interval);
+
+  ctx.metersByLabel.set(n.label, {
+    pointId: pId,
+    volumeMetricId: mVol,
+    unit: n.unit,
+    interval: n.interval,
+    label: n.label,
+    extras,
+  });
+}
+
+// 3) flowMeterWithRate → point + flow_rate (+extras)
+function compileFlowMeterWithRate(
+  ctx: Ctx,
+  n: Extract<AuthorV2, { type: "flowMeterWithRate" }>
+) {
+  const pId = gen("p");
+  const coord = toCoord(n.coords);
+  ctx.out.push({
+    model: "fl_monitoring.point",
+    pk: pId,
+    fields: {
+      id: pId,
+      tags: "[]",
+      coord,
+      label: n.label,
+      notes: n.label,
+      category: "flow_meter",
+    },
+  });
+
+  const mRate = gen("m");
+  ctx.out.push({
+    model: "fl_monitoring.metricdefinition",
+    pk: mRate,
+    fields: {
+      factor: 1,
+      offset: 0,
+      source: "USER",
+      data_type: "ANALOG",
+      value_range: [],
+      is_optimized: false,
+      storage_table: 68,
+      aggregation_type: "gauge",
+      pulse_round_down: false,
+      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      unit: n.unit,
+      label: `Flow Rate – ${n.label}`,
+      category: "flow_rate",
+      interval: n.interval,
+      describes: n.interval,
       tags_list: ["raw_data"],
-      target_id: ps.id,
+      target_id: pId,
+      id: mRate,
+    },
+  });
+
+  const extras = emitExtraMetrics(ctx, pId, n.label, n.extras, n.interval);
+
+  ctx.metersByLabel.set(n.label, {
+    pointId: pId,
+    rateMetricId: mRate,
+    unit: n.unit,
+    interval: n.interval,
+    label: n.label,
+    extras,
+  });
+}
+
+// 4) pressureSensor → point + pressure (+extras)
+function compilePressureSensor(
+  ctx: Ctx,
+  n: Extract<AuthorV2, { type: "pressureSensor" }>
+) {
+  const pId = gen("p");
+  const coord = toCoord(n.coords);
+  ctx.out.push({
+    model: "fl_monitoring.point",
+    pk: pId,
+    fields: {
+      id: pId,
+      tags: "[]",
+      coord,
+      label: n.label,
+      notes: n.label,
+      category: "pressure_sensor",
+    },
+  });
+
+  const mP = gen("m");
+  ctx.out.push({
+    model: "fl_monitoring.metricdefinition",
+    pk: mP,
+    fields: {
+      factor: 1,
+      offset: 0,
+      source: "USER",
+      data_type: "ANALOG",
+      value_range: [],
+      is_optimized: false,
+      storage_table: 68,
+      aggregation_type: "gauge",
+      pulse_round_down: false,
+      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      unit: n.unit,
+      label: `Pressure – ${n.label}`,
+      category: "pressure",
+      interval: n.interval,
+      describes: n.interval,
+      tags_list: ["raw_data"],
+      target_id: pId,
+      id: mP,
+    },
+  });
+
+  const extras = emitExtraMetrics(ctx, pId, n.label, n.extras, n.interval);
+
+  ctx.pressureByLabel.set(n.label, {
+    pointId: pId,
+    pressureMetricId: mP,
+    unit: n.unit,
+    interval: n.interval,
+    label: n.label,
+    extras,
+  });
+}
+
+// 5) zone → polygon
+function compileZoneTarget(ctx: Ctx, n: Extract<AuthorV2, { type: "zone" }>) {
+  const plId = gen("pl");
+  const poly = toPolygon(n.coords);
+  ctx.out.push({
+    model: "fl_monitoring.polygon",
+    pk: plId,
+    fields: {
+      id: plId,
+      tags: "[]",
+      coord: poly[0],
+      label: n.label,
+      notes: n.label,
+      coords: JSON.stringify(poly),
+      category: "zone",
+    },
+  });
+  ctx.zonesByLabel.set(n.label, { polygonId: plId, label: n.label });
+}
+
+/** ---------- wiring: inlets/links, normalization, zone demand(+QH), azp, cpp ---------- **/
+function wireZoneDependencies(
+  ctx: Ctx,
+  n: Extract<AuthorV2, { type: "zone" }>
+) {
+  const z = ctx.zonesByLabel.get(n.label);
+  if (!z) return;
+
+  // Inlet links (accept any meter type)
+  const inletMeters: MeterIdx[] = [];
+  for (const ref of n.inlets ?? []) {
+    const lab = parseRefMulti(ref, [
+      "flowMeterWithReading",
+      "flowMeterWithVolume",
+      "flowMeterWithRate",
+    ]);
+    if (!lab) continue;
+    const m = ctx.metersByLabel.get(lab);
+    if (!m) continue;
+
+    const id = ++linkSeq;
+    ctx.out.push({
+      model: "fl_monitoring.link",
+      pk: id,
+      fields: {
+        id,
+        args: { role: ["inlet"], order: null },
+        notes: "",
+        target_id1: m.pointId,
+        target_id2: z.polygonId,
+        relation_type: "flow_meter_in_zone",
+      },
     });
+    inletMeters.push(m);
   }
 
-  // 4) starter triggers per zone
-  // Demand (sum from all flow volumes)
-  for (const z of zones) {
-    const demandOut = demandByZone.get(z.id)!;
-    const volumeInputs = fmVolumePerZone.get(z.id) ?? [];
-    if (volumeInputs.length) {
-      const tId = ids.make("t");
-      push("fl_dispatcher.metrictrigger", tId, {
-        id: tId,
+  const wantsZoneDemand = (n.metricAbstractionId ?? []).includes(
+    "MetricCategory.zoneDemand"
+  );
+  const wantsAZP = (n.metricAbstractionId ?? []).includes("MetricCategory.azp");
+
+  // ---- FLOW VOLUME NORMALIZATION (within this zone) ----
+  // Only meters that actually have a volume metric participate in zone demand.
+  const volumeMeters = inletMeters.filter((m) => !!m.volumeMetricId);
+  let normalizedVolumeIds: string[] = [];
+
+  let highestInterval = "QUARTER_HOUR";
+  if (volumeMeters.length > 0) {
+    highestInterval = volumeMeters[0].interval;
+    for (const m of volumeMeters) {
+      if (rankInterval(m.interval) > rankInterval(highestInterval)) {
+        highestInterval = m.interval;
+      }
+    }
+
+    // For each meter: if its volume interval is lower, up-aggregate to highestInterval
+    for (const m of volumeMeters) {
+      const curr = m.interval;
+      const sameInterval = rankInterval(curr) === rankInterval(highestInterval);
+
+      if (sameInterval) {
+        // Already at the highest interval; use the original volume metric
+        normalizedVolumeIds.push(m.volumeMetricId!);
+      } else {
+        // Create a normalized flow_volume metric at the highest interval
+        const mNorm = gen("m");
+        ctx.out.push({
+          model: "fl_monitoring.metricdefinition",
+          pk: mNorm,
+          fields: {
+            factor: 1,
+            offset: 0,
+            source: "FORMULA",
+            data_type: "ANALOG",
+            value_range: [],
+            is_optimized: false,
+            storage_table: 68,
+            aggregation_type: "gauge",
+            pulse_round_down: false,
+            histogram_interval: null,
+            unit: m.unit,
+            label: `Flow Volume (${highestInterval}) – ${m.label}`,
+            category: "flow_volume",
+            interval: highestInterval,
+            describes: highestInterval,
+            tags_list: ["sum_aggregated"],
+            target_id: m.pointId,
+            id: mNorm,
+          },
+        });
+
+        // Trigger: SUM (curr -> highest) using aggregation_groups
+        const tNorm = gen("t");
+        ctx.out.push({
+          model: "fl_dispatcher.metrictrigger",
+          pk: tNorm,
+          fields: {
+            id: tNorm,
+            caller: "REAL_TIME",
+            is_active: true,
+            calculator: "",
+            calculators: [
+              {
+                calc_name: "CALCULATE_SUM",
+                calc_args: {
+                  inputs: {},
+                  time_range_type: "operation",
+                  aggregation_groups: aggGroupsForInterval(highestInterval),
+                  metric_id: calcMetricId(
+                    `${mNorm}|CALCULATE_SUM|${m.label}|${curr}->${highestInterval}`
+                  ),
+                },
+              },
+            ],
+            description: `Normalize Flow Volume ${curr}→${highestInterval} – ${m.label}`,
+            schedule_job: "",
+            input_metrics: [m.volumeMetricId!],
+            output_metric: mNorm,
+          },
+        });
+
+        normalizedVolumeIds.push(mNorm);
+      }
+    }
+  }
+
+  // ---- ZONE DEMAND (uses normalized volumes) ----
+  if (wantsZoneDemand && normalizedVolumeIds.length > 0) {
+    // Base / highest interval among inlet volumes
+    const baseIv = highestInterval;
+    const baseIvUp = String(baseIv).toUpperCase();
+
+    const baseMeter =
+      volumeMeters.find(
+        (m) => rankInterval(m.interval) === rankInterval(baseIv)
+      ) ?? volumeMeters[0];
+
+    // Label & tags per your rule:
+    // - if QUARTER_HOUR → "Zone Demand – Zone", tags ["raw_data"]
+    // - else             → "{INTERVAL} - demand - {Zone}", tags ["sum_aggregated"]
+    const isQH = baseIvUp === "QUARTER_HOUR";
+    const demandLabel = isQH
+      ? `Zone Demand – ${n.label}`
+      : `${baseIvUp} - demand - ${n.label}`;
+    const demandTags = isQH ? ["raw_data"] : ["sum_aggregated"];
+
+    // Zone demand metric at base interval
+    const mZd = gen("m");
+    ctx.out.push({
+      model: "fl_monitoring.metricdefinition",
+      pk: mZd,
+      fields: {
+        factor: 1,
+        offset: 0,
+        source: "FORMULA",
+        data_type: "ANALOG",
+        value_range: [],
+        is_optimized: false,
+        storage_table: 68,
+        aggregation_type: "gauge",
+        pulse_round_down: false,
+        histogram_interval: null,
+        unit: baseMeter.unit,
+        label: demandLabel,
+        category: "zone_demand",
+        interval: baseIv,
+        describes: baseIv,
+        tags_list: demandTags,
+        target_id: z.polygonId,
+        id: mZd,
+      },
+    });
+
+    const tZd = gen("t");
+    ctx.out.push({
+      model: "fl_dispatcher.metrictrigger",
+      pk: tZd,
+      fields: {
+        id: tZd,
         caller: "REAL_TIME",
         is_active: true,
         calculator: "",
         calculators: [
           {
+            calc_name: "CALCULATE_ZONE_DEMAND",
             calc_args: {
               inputs: {},
-              metric_id: ids.guid(),
               time_range_type: "operation",
+              metric_id: calcMetricId(
+                `${mZd}|CALCULATE_ZONE_DEMAND|${n.label}`
+              ),
             },
-            calc_name: "CALCULATE_ZONE_DEMAND",
           },
         ],
-        description: `Zone Demand – ${z.label}`,
+        description: `Zone Demand – ${n.label}`,
         schedule_job: "",
-        input_metrics: volumeInputs,
-        output_metric: demandOut,
+        input_metrics: normalizedVolumeIds,
+        output_metric: mZd,
+      },
+    });
+
+    // ---- Create QUARTER_HOUR demand if base != QH ----
+    if (!isQH) {
+      const mZdQH = gen("m");
+      ctx.out.push({
+        model: "fl_monitoring.metricdefinition",
+        pk: mZdQH,
+        fields: {
+          factor: 1,
+          offset: 0,
+          source: "FORMULA",
+          data_type: "ANALOG",
+          value_range: [],
+          is_optimized: false,
+          storage_table: 68,
+          aggregation_type: "gauge",
+          pulse_round_down: false,
+          histogram_interval: null,
+          unit: baseMeter.unit,
+          // keep the normal QH label
+          label: `Zone Demand – ${n.label}`,
+          category: "zone_demand",
+          interval: "QUARTER_HOUR",
+          describes: "QUARTER_HOUR",
+          tags_list: ["raw_data"],
+          target_id: z.polygonId,
+          id: mZdQH,
+        },
+      });
+
+      const factor =
+        minutesForInterval("QUARTER_HOUR") / minutesForInterval(baseIvUp); // e.g., 15/60 = 0.25
+
+      const tQh = gen("t");
+      ctx.out.push({
+        model: "fl_dispatcher.metrictrigger",
+        pk: tQh,
+        fields: {
+          id: tQh,
+          caller: "REAL_TIME",
+          is_active: true,
+          calculator: "",
+          calculators: [
+            {
+              calc_name: "CALCULATE_TRANSFORM",
+              calc_args: {
+                factor,
+                inputs: {},
+                offset: 0,
+                metric_id: calcMetricId(
+                  `${mZdQH}|CALCULATE_TRANSFORM|${n.label}|${baseIvUp}->QUARTER_HOUR`
+                ),
+                time_range_type: "follow",
+              },
+            },
+          ],
+          description: `Demand – ${n.label}`,
+          schedule_job: "",
+          input_metrics: [mZd],
+          output_metric: mZdQH,
+        },
       });
     }
   }
 
-  // AZP (avg of all pressure metrics in the zone)
-  const pressureMetricDefs = out.filter(
-    (x) =>
-      x.model === "fl_monitoring.metricdefinition" &&
-      x.fields?.category === "pressure"
-  );
+  // ---- CPP exclusion from AZP ----
+  const cppLabel = n.cppSensor
+    ? parseRefMulti(n.cppSensor, ["pressureSensor"])
+    : null;
+  const cppIdx = cppLabel ? ctx.pressureByLabel.get(cppLabel) : undefined;
 
-  for (const z of zones) {
-    const inZonePressureIds: string[] = [];
-    for (const pm of pressureMetricDefs) {
-      const ptId: string | undefined = pm.fields?.target_id;
-      const pt = points.find((p) => p.id === ptId);
-      if (pt && pointInPolygon(pt.coord, z.poly))
-        inZonePressureIds.push(pm.pk as string);
+  let azpList: PressureIdx[] = [];
+  if (wantsAZP && (n.azpSensors?.length ?? 0) > 0) {
+    const seen = new Set<string>();
+    for (const ref of n.azpSensors ?? []) {
+      const lab = parseRefMulti(ref, ["pressureSensor"]);
+      if (!lab) continue;
+      if (cppLabel && lab === cppLabel) continue; // exclude CPP from AZP
+      if (seen.has(lab)) continue;
+      seen.add(lab);
+      const p = ctx.pressureByLabel.get(lab);
+      if (p) azpList.push(p);
     }
-    if (inZonePressureIds.length) {
-      const azpOut = azpByZone.get(z.id)!;
-      const tId = ids.make("t");
-      push("fl_dispatcher.metrictrigger", tId, {
-        id: tId,
+  }
+
+  // AZP metric + trigger
+  if (azpList.length > 0) {
+    const base = azpList[0];
+    const mAzp = gen("m");
+    ctx.out.push({
+      model: "fl_monitoring.metricdefinition",
+      pk: mAzp,
+      fields: {
+        factor: 1,
+        offset: 0,
+        source: "FORMULA",
+        data_type: "ANALOG",
+        value_range: [],
+        is_optimized: false,
+        storage_table: 68,
+        aggregation_type: "gauge",
+        pulse_round_down: false,
+        histogram_interval: { days: 0, hours: 0, minutes: 0 },
+        unit: base.unit,
+        label: `AZP – ${n.label}`,
+        category: "average_zone_pressure",
+        interval: base.interval,
+        describes: base.interval,
+        tags_list: ["avg_aggregated"],
+        target_id: z.polygonId,
+        id: mAzp,
+      },
+    });
+
+    const tAzp = gen("t");
+    ctx.out.push({
+      model: "fl_dispatcher.metrictrigger",
+      pk: tAzp,
+      fields: {
+        id: tAzp,
         caller: "REAL_TIME",
         is_active: true,
         calculator: "",
         calculators: [
           {
+            calc_name: "CALCULATE_AVG",
             calc_args: {
               inputs: {},
-              metric_id: ids.guid(),
               time_range_type: "operation",
               aggregation_groups: [],
+              metric_id: calcMetricId(`${mAzp}|CALCULATE_AVG|${n.label}`),
             },
-            calc_name: "CALCULATE_AVG",
           },
         ],
-        description: `AZP – ${z.label}`,
+        description: `AZP – ${n.label}`,
         schedule_job: "",
-        input_metrics: inZonePressureIds,
-        output_metric: azpOut,
-      });
-    }
+        input_metrics: azpList.map((p) => p.pressureMetricId),
+        output_metric: mAzp,
+      },
+    });
   }
 
-  return out;
+  // CPP — metric at CPP sensor point + passthrough AVG (single input)
+  if (cppIdx) {
+    const mCpp = gen("m");
+    ctx.out.push({
+      model: "fl_monitoring.metricdefinition",
+      pk: mCpp,
+      fields: {
+        factor: 1,
+        offset: 0,
+        source: "FORMULA",
+        data_type: "ANALOG",
+        value_range: [],
+        is_optimized: false,
+        storage_table: 68,
+        aggregation_type: "gauge",
+        pulse_round_down: false,
+        histogram_interval: { days: 0, hours: 0, minutes: 0 },
+        unit: cppIdx.unit,
+        label: `CPP – ${cppIdx.label}`,
+        category: "critical_point_pressure",
+        interval: cppIdx.interval,
+        describes: cppIdx.interval,
+        tags_list: ["raw_data"],
+        target_id: cppIdx.pointId, // attach to the CPP SENSOR POINT
+        id: mCpp,
+      },
+    });
+
+    const tCpp = gen("t");
+    ctx.out.push({
+      model: "fl_dispatcher.metrictrigger",
+      pk: tCpp,
+      fields: {
+        id: tCpp,
+        caller: "REAL_TIME",
+        is_active: true,
+        calculator: "",
+        calculators: [
+          {
+            calc_name: "CALCULATE_AVG",
+            calc_args: {
+              inputs: {},
+              time_range_type: "operation",
+              aggregation_groups: [],
+              metric_id: calcMetricId(`${mCpp}|CPP_AVG|${cppIdx.label}`),
+            },
+          },
+        ],
+        description: `CPP from ${cppIdx.label}`,
+        schedule_job: "",
+        input_metrics: [cppIdx.pressureMetricId],
+        output_metric: mCpp,
+      },
+    });
+  }
+}
+
+/** ---------- ref parsing ---------- **/
+function parseRefMulti(
+  ref: string,
+  expectedTypes: Array<
+    | "flowMeterWithReading"
+    | "flowMeterWithVolume"
+    | "flowMeterWithRate"
+    | "pressureSensor"
+  >
+): string | null {
+  if (typeof ref !== "string" || !ref.startsWith("$")) return null;
+  const body = ref.slice(1); // e.g., flowMeterWithVolume.M1
+  const [type, ...rest] = body.split(".");
+  const label = rest.join(".");
+  if (!expectedTypes.includes(type as any)) return null;
+  return label || null;
 }
