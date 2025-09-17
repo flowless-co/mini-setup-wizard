@@ -120,6 +120,7 @@ export function buildLowLevel(input: AuthorV2[]): FixtureItem[] {
   };
 
   // Pass 1: targets + direct metrics
+  // TODO: Make it dynamic to be able to accept variance of unusual categories
   for (const node of input) {
     if (node.type === "flowMeterWithReading") {
       compileFlowMeterWithReading(ctx, node);
@@ -181,14 +182,14 @@ function emitExtraMetrics(
       fields: {
         factor: 1,
         offset: 0,
-        source: "USER",
+        source: "SENSOR",
         data_type: "ANALOG",
         value_range: [],
         is_optimized: false,
         storage_table: 68,
         aggregation_type: "gauge",
         pulse_round_down: false,
-        histogram_interval: { days: 0, hours: 0, minutes: 0 },
+        histogram_interval: null,
         unit,
         label,
         category,
@@ -242,14 +243,14 @@ function compileFlowMeterWithReading(
     fields: {
       factor: 1,
       offset: 0,
-      source: "USER",
+      source: "SENSOR",
       data_type: "ANALOG",
       value_range: [],
       is_optimized: false,
       storage_table: 68,
       aggregation_type: "gauge",
       pulse_round_down: false,
-      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      histogram_interval: null,
       unit: n.unit,
       label: `Flow Reading – ${n.label}`,
       category: "flow_reading",
@@ -276,7 +277,7 @@ function compileFlowMeterWithReading(
       storage_table: 68,
       aggregation_type: "gauge",
       pulse_round_down: false,
-      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      histogram_interval: null,
       unit: n.unit,
       label: `Flow Volume – ${n.label}`,
       category: "flow_volume",
@@ -355,14 +356,14 @@ function compileFlowMeterWithVolume(
     fields: {
       factor: 1,
       offset: 0,
-      source: "USER", // direct volume
+      source: "SENSOR", // direct volume
       data_type: "ANALOG",
       value_range: [],
       is_optimized: false,
       storage_table: 68,
       aggregation_type: "gauge",
       pulse_round_down: false,
-      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      histogram_interval: null,
       unit: n.unit,
       label: `Flow Volume – ${n.label}`,
       category: "flow_volume",
@@ -413,14 +414,14 @@ function compileFlowMeterWithRate(
     fields: {
       factor: 1,
       offset: 0,
-      source: "USER",
+      source: "SENSOR",
       data_type: "ANALOG",
       value_range: [],
       is_optimized: false,
       storage_table: 68,
       aggregation_type: "gauge",
       pulse_round_down: false,
-      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      histogram_interval: null,
       unit: n.unit,
       label: `Flow Rate – ${n.label}`,
       category: "flow_rate",
@@ -471,14 +472,14 @@ function compilePressureSensor(
     fields: {
       factor: 1,
       offset: 0,
-      source: "USER",
+      source: "SENSOR",
       data_type: "ANALOG",
       value_range: [],
       is_optimized: false,
       storage_table: 68,
       aggregation_type: "gauge",
       pulse_round_down: false,
-      histogram_interval: { days: 0, hours: 0, minutes: 0 },
+      histogram_interval: null,
       unit: n.unit,
       label: `Pressure – ${n.label}`,
       category: "pressure",
@@ -799,7 +800,6 @@ function wireZoneDependencies(
     for (const ref of n.azpSensors ?? []) {
       const lab = parseRefMulti(ref, ["pressureSensor"]);
       if (!lab) continue;
-      if (cppLabel && lab === cppLabel) continue; // exclude CPP from AZP
       if (seen.has(lab)) continue;
       seen.add(lab);
       const p = ctx.pressureByLabel.get(lab);
@@ -824,7 +824,7 @@ function wireZoneDependencies(
         storage_table: 68,
         aggregation_type: "gauge",
         pulse_round_down: false,
-        histogram_interval: { days: 0, hours: 0, minutes: 0 },
+        histogram_interval: null,
         unit: base.unit,
         label: `AZP – ${n.label}`,
         category: "average_zone_pressure",
@@ -880,7 +880,7 @@ function wireZoneDependencies(
         storage_table: 68,
         aggregation_type: "gauge",
         pulse_round_down: false,
-        histogram_interval: { days: 0, hours: 0, minutes: 0 },
+        histogram_interval: null,
         unit: cppIdx.unit,
         label: `CPP – ${cppIdx.label}`,
         category: "critical_point_pressure",
